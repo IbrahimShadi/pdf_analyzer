@@ -1,0 +1,3 @@
+E-Ticket Itinerary
+PNR: ABC123
+Flight LH123 Boarding 10:20 Gate A12 Departure FRA Arrival LHR

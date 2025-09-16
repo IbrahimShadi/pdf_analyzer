@@ -1,0 +1,4 @@
+Invoice No: INV-123
+Bill To: ACME GmbH
+Invoice Date: 01.07.2025
+Amount Due: € 123,45

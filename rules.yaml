@@ -1,0 +1,64 @@
+
+invoice:
+  temperature: 1.0
+  keywords:
+    - "invoice"
+    - "invoice no"
+    - "invoice number"
+    - "amount due"
+    - "vat"
+    - "bill to"
+    - "subtotal"
+    - "po #"
+    - "purchase order"
+  phrases:
+    - "payment terms"
+    - "due date"
+    - "tax"
+  regexes:
+    - pattern: '(?i)invoice\s*(no\.|no|number)\s*[:#]?\s*[A-Z0-9-]{3,}'
+      weight: 2.0
+
+flight_ticket:
+  temperature: 1.0
+  keywords:
+    - "e-ticket"
+    - "pnr"
+    - "flight"
+    - "boarding"
+    - "gate"
+    - "departure"
+    - "arrival"
+    - "carrier"
+    - "itinerary"
+    - "seat"
+  phrases:
+    - "electronic ticket"
+    - "booking reference"
+  regexes:
+    - pattern: '(?i)PNR\s*[:#]?\s*[A-Z0-9]{5,7}'
+      weight: 1.5
+
+passport:
+  temperature: 1.0
+  keywords:
+    - "passport"
+    - "nationality"
+    - "given names"
+    - "date of expiry"
+    - "place of birth"
+    - "surname"
+    - "issuing authority"
+    - "date of issue"
+    - "mrz"
+  phrases:
+    - "machine readable zone"
+  regexes:
+    - pattern: '[P<][A-Z]{3}[A-Z<]{1,39}<<[A-Z<]{1,39}[0-9<]{9}[A-Z0-9<]{1,}'
+      weight: 3.0
+
+other:
+  temperature: 1.0
+  keywords: []
+  phrases: []
+  regexes: []
