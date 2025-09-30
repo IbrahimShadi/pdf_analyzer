@@ -1,0 +1,2 @@
+path_in,path_out,top_class,confidence,invoice_number,customer_name,invoice_date,total_value,currency,pnr,passenger_name,flight_number,departure_date,carrier,surname,given_names,nationality,date_of_expiry,errors
+.\docs\Ticket_Nigel Anderson_TUN-BEN-TUN_30.04-30.05.2025.PDF,,flight_ticket,1.0,,,,,,ABJLPX,Nigeljames Anderson,NB0102,2025-04-30,Berniq Airways,,,,,
