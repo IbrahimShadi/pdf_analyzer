@@ -8,7 +8,7 @@ __pycache__/
 
 # docs und results.csv
 docs/
-results.csv
+results
 
 # Distribution / packaging
 .Python
