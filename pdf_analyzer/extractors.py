@@ -8,6 +8,9 @@ from dateutil import parser as dateparser
 
 MONTH_TOKENS = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","SEPT","OCT","NOV","DEC"}
 
+HEADER_LABELS = r"(?:TRAVELLER|TRAVELER|PASSENGER\s+INFORMATION|PASSENGER\s*NAME|PAX(?:\s*NAME)?|NAME\s+OF\s+PASSENGER)"
+
+
 # One unified set for both filtering and glued-suffix removal
 TITLE_TOKENS = {"MR","MRS","MS","MISS","MSTR","DR","PROF","REV","JR","SR","II","III","IV","MME","MLLE","SIR","LADY","INF","CHD"}
 
@@ -37,9 +40,22 @@ AIRLINE_CODE_MAP = {
 }
 
 def _strip_paren_title(s: str) -> str:
-    # remove a title that appears in parentheses at the end: "John Doe (MR)"
     pat = r"\s*\(\s*(?:%s)\s*\)\s*$" % "|".join(sorted(TITLE_TOKENS, key=len, reverse=True))
     return re.sub(pat, "", s, flags=re.I)
+
+def _strip_trailing_title_token(s: str) -> str:
+    return re.sub(r"\s+(?:%s)\.?\s*$" % "|".join(sorted(TITLE_TOKENS, key=len, reverse=True)), "", s, flags=re.I)
+
+def _block_label_to_name(blob: str) -> Optional[str]:
+    # handles "MR Spillane Andrew John (ADT)" or "MR ANDREW CORBETT"
+    b = _strip_trailing_title_token(_strip_paren_title(blob.strip(" ,")))
+    # drop title if it starts the blob
+    b = re.sub(r"^(?:%s)\.?\s+" % "|".join(TITLE_TOKENS), "", b, flags=re.I)
+    parts = [p for p in re.findall(r"[A-Za-z'’\-]+", b) if p.upper() not in TITLE_TOKENS]
+    if len(parts) >= 2:
+        last, first = parts[-1], " ".join(parts[:-1])
+        return _normalize_name(first, last)
+    return None
 
 
 def _normalize_time(hh: str, mm: str, ampm: Optional[str]) -> str:
