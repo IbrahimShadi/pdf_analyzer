@@ -16,20 +16,31 @@ NAME_STOPWORDS = {
     "AIR","AIRWAYS","AIRLINE","AERO","BURAQ","BERNIQ","MEDSKY","LIBYAN","WINGS","CARRIER",
     "BOARDING","GATE","ARRIVAL","DEPARTURE","DEPARTING","ARRIVING","FLIGHT","ORIGIN",
     "DESTINATION","AIRPORT","TERMINAL","VARS","PERSON","KG","CO2","EMISSIONS","CHECKMYTRIP","APP",
-    "ELECTRONIC","TICKET","RECEIPT","REFERENCE","RECORD","LOCATOR","CONTACT","NAME","PASSENGER"
+    "ELECTRONIC","TICKET","RECEIPT","REFERENCE","RECORD","LOCATOR","CONTACT","NAME","PASSENGER", "AGENT", "VIEWER", "AGENCY",
+    "CONSULTANT", "ISSUED", "BY", "CHANGE","REISSUE","REVALIDATION","VALID","NONREF","NONEND","END","RULE","RULES",
+    "FARE","CLASS","CABIN","BAGGAGE","ALLOWANCE","TAX","TAXES","TOTAL","PENALTY",
+    "CANCEL","CANCELLATION","REFUND","DATE","ISSUE","NUMBERS","NUMBER","NBR","NBR."
 }
 
-# Airline code allow-list (extend as you see more)
+
+# Airline code allow-list
 KNOWN_AIRLINE_CODES = {
-    "NB","BM","UZ","YL",           # local samples (Berniq, MedSky, Buraq, Libyan Wings)
+    "NB","BM","UZ","YL","KM",   # + KM Malta Airlines
     "AF","TK","BJ","TU","KL","AZ","LH","BA","EK","QR","MS","PC","A3","W6","FR","U2","VY","TP","IB","SN","OS","LX","LO"
 }
 
 # Map 2/3-letter codes to carrier names (extend as needed)
 AIRLINE_CODE_MAP = {
     "NB": "Berniq Airways", "BM": "MedSky Airways", "UZ": "Buraq Air", "YL": "Libyan Wings",
-    "AF": "Air France", "TK": "Turkish Airlines", "BJ": "Nouvelair", "TU": "Tunisair"
+    "AF": "Air France", "TK": "Turkish Airlines", "BJ": "Nouvelair", "TU": "Tunisair",
+    "KM": "KM Malta Airlines"   # <—
 }
+
+def _strip_paren_title(s: str) -> str:
+    # remove a title that appears in parentheses at the end: "John Doe (MR)"
+    pat = r"\s*\(\s*(?:%s)\s*\)\s*$" % "|".join(sorted(TITLE_TOKENS, key=len, reverse=True))
+    return re.sub(pat, "", s, flags=re.I)
+
 
 def _normalize_time(hh: str, mm: str, ampm: Optional[str]) -> str:
     h = int(hh)
@@ -93,24 +104,26 @@ def _unglue_title_suffix(s: str) -> str:
     return re.sub(pat, "", s, flags=re.I)
 
 def _looks_like_name(s: str) -> bool:
-    # shape + stopword filter
     s = s.strip(" ,")
     if len(s) < 4 or len(s) > 80:
         return False
-    if re.search(r"[^A-Za-z '\-]", s):  # only letters, spaces, apostrophes, hyphens
+    if re.search(r"[^A-Za-z '\-]", s):
         return False
+
     parts = [p for p in re.split(r"\s+", s) if p]
     if not (2 <= len(parts) <= 4):
         return False
     if any(len(re.sub(r"[^A-Za-z]", "", p)) < 2 for p in parts):
         return False
-    U = s.upper()
-    if any(w in U for w in NAME_STOPWORDS):
+
+    # NEW: whole-word stopword check (no substring false-positives)
+    tokens = [re.sub(r"[^A-Z]", "", t) for t in re.split(r"\s+", s.upper()) if t]
+    if any(tok in NAME_STOPWORDS for tok in tokens):
         return False
-    if any(m in U for m in MONTH_TOKENS):
+
+    if any(tok in MONTH_TOKENS for tok in tokens):
         return False
     return True
-
 # =================
 # Invoice extractor
 # =================
@@ -229,79 +242,131 @@ def _extract_pnr(text: str) -> Optional[str]:
     return None
 
 def _extract_ticket_number(text: str) -> Optional[str]:
-    # 13-digit IATA number (may have hyphen/space after first 3 digits)
-    m = re.search(r"(?i)\b(?:ETKT|E-?TKT|TICKET(?:\s*NUMBER)?|ELECTRONIC\s+TICKET)\b[^0-9]{0,12}(\d{3}[- ]?\d{10})\b", text)
-    if m:
-        return re.sub(r"[- ]", "", m.group(1))
-    # Fallback: any 13-digit split 3+10
-    m = re.search(r"\b(\d{3})[- ]?(\d{10})\b", text)
+    """
+    Capture 13-digit IATA ticket numbers with optional separators/coupon:
+      928-2972010007
+      928 2972010007       (includes NBSP/thin spaces)
+      9282972010007
+      ETKT928 2972010007/01
+      ELECTRONIC TICKET ... 928-2972010007/01
+    """
+    # allow normal space, non-breaking space, thin space, etc.
+    SP = r"[ \t\u00A0\u2007\u202F]"
+    SEP = rf"(?:-|{SP})?"
+
+    # Label-driven first
+    label = r"(?i)\b(?:ETKT|E-?TKT|ELECTRONIC\s+TICKET|TICKET(?:\s*(?:NO|NBR|NUMBER))?|TKT)\b"
+    m = re.search(label + rf"\D{{0,20}}(\d{{3}}){SEP}(\d{{10}})(?:\s*/\s*\d{{1,2}})?", text)
     if m:
         return m.group(1) + m.group(2)
+
+    # Fallback: any 3+10 digits with optional separator and optional coupon
+    m = re.search(rf"\b(\d{{3}}){SEP}(\d{{10}})(?:\s*/\s*\d{{1,2}})?\b", text)
+    if m:
+        return m.group(1) + m.group(2)
+
+    # Last chance: 13 consecutive digits near ticket words
+    m = re.search(r"(?i)(?:ETKT|E-?TKT|TICKET|ELECTRONIC)\D{0,20}(\d{13})", text)
+    if m:
+        return m.group(1)
+
     return None
+
 
 def _candidate_names(text: str) -> List[Tuple[str, int, int]]:
     """
     Return a list of (name, offset, priority). Higher priority wins.
+      5: strict IATA SURNAME/GIVEN(TITLE) uppercase with slash
+      4: title-first uppercase (MR TAREK SHERIF), or label-based (PASSENGER/PAX) same/next line
+      3: plain uppercase from labels
+      2: relaxed IATA LAST/FIRST allowing spaces
+      2: comma style LAST, FIRST [TITLE]
     """
     cands: List[Tuple[str, int, int]] = []
 
-    # 0) STRICT IATA "glued" form: SURNAME/GIVEN(TITLE) — highest priority
-    # all caps, optional ' or -, no spaces; title may be stuck at the end of second token
+    # 0) STRICT IATA SURNAME/GIVEN (uppercase, slash)
     for m in re.finditer(r"(?<![A-Z])([A-Z][A-Z'\-]{1,39})/([A-Z][A-Z'\-]{1,39})(?![A-Z])", text):
-        # avoid Agent/Contact context
-        pre = text[max(0, m.start()-30):m.start()].upper()
-        if "AGENT" in pre or "CONTACT" in pre:
+        pre = text[max(0, m.start()-40):m.start()].upper()
+        if "AGENT" in pre or "CONTACT" in pre or "VIEWER" in pre:
             continue
         last = m.group(1).strip(" -'/")
         first_raw = m.group(2).strip(" -'/")
-        first_raw = _unglue_title_suffix(first_raw)   # remove MR/MRS/MSTR… if glued
-        # keep glued given names as ONE token (no splitting)
+        first_raw = _unglue_title_suffix(first_raw)
         first = _title_case_name(first_raw)
         cands.append((_normalize_name(first, last), m.start(), 5))
 
-    # 1) PASSENGERS table line (very strong)
-    for m in re.finditer(r"(?is)\bPASSENGERS?\b.*?\n\s*([A-Z][A-Z'\-]{1,39}/[A-Z][A-Z'\-]{1,39})", text):
-        m2 = re.match(r"([A-Z][A-Z'\-]{1,39})/([A-Z][A-Z'\-]{1,39})", m.group(1))
-        if m2:
-            last = m2.group(1).strip(" -'/")
-            first_raw = _unglue_title_suffix(m2.group(2).strip(" -'/"))
-            first = _title_case_name(first_raw)  # keep glued
-            cands.append((_normalize_name(first, last), m.start(1), 4))
+    # 1) Title-first uppercase: MR TAREK SHERIF
+    for m in re.finditer(r"(?i)\b(MR|MRS|MS|MISS|MSTR|DR|PROF)\.?\s+([A-Z][A-Z'\-]{2,40})(?:\s+([A-Z][A-Z'\-]{2,40}))\b", text):
+        pre = text[max(0, m.start()-40):m.start()].upper()
+        if "AGENT" in pre or "CONTACT" in pre or "VIEWER" in pre:
+            continue
+        # allow optional middle token
+        first_tokens = [t for t in (m.group(2), m.group(3)) if t]
+        if len(first_tokens) == 1:
+            # MR JOHN DOE  (m.group(3) is actually last)
+            # fall back to two-token name when only one first token present
+            pass
+        # we can't reliably tell which token is the last name here; prefer label-based when available
+        if m.group(3):
+            first = _title_case_name(m.group(2))
+            last  = _title_case_name(m.group(3))
+            cands.append((f"{first} {last}", m.start(), 4))
 
-    # 2) Passenger-specific labels (same line) — high priority
-    for m in re.finditer(r"(?i)\b(Passenger(?:\s*Name)?|Traveller|Traveler|Name of Passenger)\b\s*[:#]?\s*([A-Z ,'\-]{4,80})", text):
+    # 2) Label-based, same line (Passenger Name / PAX Name / Name of Passenger)
+    label_same = r"(?i)\b(Passenger(?:\s*Name)?|PAX(?:\s*Name)?|Name\s+of\s+Passenger)\b\s*[:#]?\s*([A-Z ,'\-()]{4,120})"
+    for m in re.finditer(label_same, text):
         blob = m.group(2).strip(" ,")
         off = m.start(2)
-        m2 = re.search(r"^\s*([A-Z'\- ]{2,40}),\s*([A-Z'\- ]{2,40})", blob)  # DOE, JOHN
+        # LAST, FIRST [TITLE]
+        m2 = re.search(r"^\s*([A-Z'\- ]{2,40}),\s*([A-Z'\- ]{2,40})(?:\s+(?:%s)\.?)?$" % "|".join(TITLE_TOKENS), blob)
         if m2:
-            cands.append((_normalize_name(m2.group(2), m2.group(1)), off, 3))
-        else:
-            parts = [p for p in blob.split() if p.upper() not in TITLE_TOKENS]
-            if len(parts) >= 2:
-                cands.append((_normalize_name(parts[0], " ".join(parts[1:])), off, 3))
-
-    # 3) Passenger-specific labels (next line) — high priority
-    for m in re.finditer(r"(?is)\b(Passenger(?:\s*Name)?|Traveller|Traveler|Name of Passenger)\b\s*[:#]?\s*\r?\n\s*([A-Z ,'\-]{4,80})", text):
-        blob = m.group(2).strip(" ,")
-        off = m.start(2)
-        parts = [p for p in blob.split() if p.upper() not in TITLE_TOKENS]
+            last  = _title_case_name(m2.group(1))
+            first = _title_case_name(m2.group(2))
+            cands.append((_normalize_name(first, last), off, 4))
+            continue
+        # SURNAME/GIVEN
+        m3 = re.search(r"\b([A-Z][A-Z'\-]{1,40})/([A-Z][A-Z'\-]{1,40})\b", blob)
+        if m3:
+            first = _title_case_name(_unglue_title_suffix(m3.group(2)))
+            last  = _title_case_name(m3.group(1))
+            cands.append((_normalize_name(first, last), off, 4))
+            continue
+        # Plain uppercase + optional (MR)
+        blob2 = _strip_paren_title(blob)
+        parts = [p for p in blob2.split() if p.upper() not in TITLE_TOKENS]
         if len(parts) >= 2:
             cands.append((_normalize_name(parts[0], " ".join(parts[1:])), off, 3))
 
-    # 4) IATA LAST/FIRST (with spaces allowed) — medium priority
+    # 3) Label-based, next line
+    label_next = r"(?is)\b(Passenger(?:\s*Name)?|PAX(?:\s*Name)?|Name\s+of\s+Passenger)\b\s*[:#]?\s*\r?\n\s*([A-Z ,'\-()]{4,120})"
+    for m in re.finditer(label_next, text):
+        blob = m.group(2).strip(" ,")
+        off = m.start(2)
+        m3 = re.search(r"\b([A-Z][A-Z'\-]{1,40})/([A-Z][A-Z'\-]{1,40})\b", blob)
+        if m3:
+            first = _title_case_name(_unglue_title_suffix(m3.group(2)))
+            last  = _title_case_name(m3.group(1))
+            cands.append((_normalize_name(first, last), off, 4))
+        else:
+            blob2 = _strip_paren_title(blob)
+            parts = [p for p in blob2.split() if p.upper() not in TITLE_TOKENS]
+            if len(parts) >= 2:
+                cands.append((_normalize_name(parts[0], " ".join(parts[1:])), off, 3))
+
+    # 4) Relaxed IATA LAST/FIRST with spaces (anywhere)
     for m in re.finditer(r"(?i)\b([A-Z][A-Z'\- ]{1,40})/([A-Z][A-Z'\- ]{1,40})\b", text):
         last = m.group(1).strip(" -'/")
-        first_raw = _unglue_title_suffix(m.group(2).strip(" -'/"))
-        first = _title_case_name(first_raw)
+        first = _title_case_name(_unglue_title_suffix(m.group(2).strip(" -'/")))
         cands.append((_normalize_name(first, last), m.start(), 2))
 
-    # 5) Agent/Contact names — low priority (kept but unlikely to win)
-    for m in re.finditer(r"(?i)\b(Contact\s+Name|Agent\s+Name)\b\s*[:#]?\s*([A-Z][A-Za-z'\- ]{3,80})", text):
-        blob = m.group(2).strip()
-        off = m.start(2)
-        parts = [p for p in blob.split() if p.upper() not in TITLE_TOKENS]
-        if len(parts) >= 2:
-            cands.append((" ".join(_title_case_name(p) for p in parts), off, 1))
+    # 5) Comma style anywhere: "SHERIF, TAREK MR"
+    for m in re.finditer(r"(?i)\b([A-Z][A-Z'\- ]{2,40}),\s*([A-Z][A-Z'\- ]{2,40})(?:\s+(?:%s)\.?)?\b" % "|".join(TITLE_TOKENS), text):
+        pre = text[max(0, m.start()-40):m.start()].upper()
+        if any(sw in pre for sw in ("AGENT", "CONTACT", "VIEWER")):
+            continue
+        last  = _title_case_name(m.group(1).strip())
+        first = _title_case_name(m.group(2).strip())
+        cands.append((_normalize_name(first, last), m.start(), 2))
 
     return cands
 
@@ -313,7 +378,7 @@ def _pick_best_name(cands: List[Tuple[str, int, int]]) -> Optional[str]:
     def score(item: Tuple[str, int, int]) -> float:
         n, off, prio = item
         t = len(n.split())
-        base = (2.0 if t == 2 else 1.6 if t == 3 else 1.0) + 0.7 * prio  # priority matters more
+        base = (2.2 if t == 2 else 1.7 if t == 3 else 1.0) + 0.8 * prio
         return base - 0.01 * len(n) - 0.000001 * off
 
     cands.sort(key=score, reverse=True)
