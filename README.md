@@ -26,7 +26,7 @@ System deps for OCR:
 - Poppler (for `pdf2image` to render PDF pages), e.g., `apt install poppler-utils`
 
 ```bash
-python -m venv .venv
+py -3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
